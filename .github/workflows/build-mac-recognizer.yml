@@ -1,0 +1,95 @@
+name: Build macOS recognizer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+          - name: macos-intel
+            os: macos-15-intel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Show environment
+        run: |
+          uname -a
+          python -VV
+          python -c "import platform; print('machine=', platform.machine()); print('platform=', platform.platform())"
+
+      - name: Check required files
+        run: |
+          test -f recognizer.py
+          test -f dakanji/model.tflite
+          test -f dakanji/labels.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install numpy pillow ai-edge-litert pyinstaller
+          python -m pip freeze
+
+      - name: LiteRT import test
+        run: |
+          python - <<'PY'
+          from ai_edge_litert.interpreter import Interpreter
+          print('ai_edge_litert Interpreter import OK:', Interpreter)
+          PY
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean --onedir --name recognizer \
+            --collect-all ai_edge_litert \
+            --add-data "dakanji/model.tflite:dakanji" \
+            --add-data "dakanji/labels.txt:dakanji" \
+            recognizer.py
+
+      - name: Ad-hoc sign executable
+        run: |
+          chmod +x dist/recognizer/recognizer
+          codesign --force --deep --sign - dist/recognizer/recognizer || true
+
+      - name: Smoke test recognizer
+        run: |
+          cat > recognizer_input.jsonl <<'EOF'
+          {"cmd":"ping","id":1}
+          {"cmd":"recognize","id":2,"source":"github_actions_smoke","nBest":3,"strokes":[[[20,20],[220,220]],[[220,20],[20,220]]]}
+          EOF
+          ./dist/recognizer/recognizer < recognizer_input.jsonl > recognizer_stdout.log 2> recognizer_stderr.log
+          echo "--- stdout ---"
+          cat recognizer_stdout.log
+          echo "--- stderr ---"
+          cat recognizer_stderr.log
+          grep '"pong": true' recognizer_stdout.log
+          grep '"scores"' recognizer_stdout.log
+
+      - name: Package tar.gz
+        run: |
+          tar -czf recognizer-${{ matrix.name }}.tar.gz -C dist recognizer
+          ls -lh recognizer-${{ matrix.name }}.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recognizer-${{ matrix.name }}
+          path: |
+            recognizer-${{ matrix.name }}.tar.gz
+            recognizer_stdout.log
+            recognizer_stderr.log
+          if-no-files-found: warn
