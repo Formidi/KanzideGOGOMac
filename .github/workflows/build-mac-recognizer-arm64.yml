@@ -17,60 +17,72 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Show files
-        run: |
-          pwd
-          ls -la
-          test -f recognizer.py
-          test -f dakanji/model.tflite
-          test -f dakanji/labels.txt
+      - name: Prepare logs
+        run: mkdir -p logs
 
       - name: Install dependencies
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
+          set -euxo pipefail
+          python -m pip install --upgrade pip > logs/pip_install.log 2>&1
           if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
+            python -m pip install -r requirements.txt >> logs/pip_install.log 2>&1
           else
-            pip install numpy pillow ai-edge-litert pyinstaller
+            python -m pip install numpy pillow ai-edge-litert pyinstaller >> logs/pip_install.log 2>&1
           fi
 
       - name: LiteRT import test
+        shell: bash
         run: |
-          python - <<'PY'
+          set -euxo pipefail
+          python - <<'PY' > logs/litert_import.log 2>&1
           from ai_edge_litert.interpreter import Interpreter
-          print('ai_edge_litert import OK:', Interpreter)
+          print("LiteRT import OK", Interpreter)
           PY
 
       - name: Build with PyInstaller
+        shell: bash
         run: |
-          pyinstaller --clean --noconfirm --onedir --name recognizer recognizer.py \
+          set -euxo pipefail
+          pyinstaller --clean --onedir --name recognizer \
             --add-data "dakanji/model.tflite:dakanji" \
             --add-data "dakanji/labels.txt:dakanji" \
-            --collect-all ai_edge_litert
+            recognizer.py > logs/pyinstaller_build.log 2>&1
 
-      - name: Rename output folder to AppleSiliconMac
+      - name: Smoke test recognizer
+        shell: bash
         run: |
-          rm -rf ./dist/AppleSiliconMac
-          mv ./dist/recognizer ./dist/AppleSiliconMac
-          chmod +x ./dist/AppleSiliconMac/recognizer
-          find ./dist/AppleSiliconMac -maxdepth 2 -type f | head -50
+          set -euxo pipefail
+          chmod +x ./dist/recognizer/recognizer
+          printf '%s\n' '{"cmd":"ping","id":1}' | ./dist/recognizer/recognizer > logs/recognizer_stdout.log 2> logs/recognizer_stderr.log
+          cat logs/recognizer_stdout.log
+          grep -q '"pong": true' logs/recognizer_stdout.log
 
-      - name: Smoke test ping
+      - name: Package AppleSiliconMac without symlinks
+        shell: bash
         run: |
-          printf '%s\n' '{"cmd":"ping","id":1}' | ./dist/AppleSiliconMac/recognizer
+          set -euxo pipefail
+          rm -rf package AppleSiliconMac recognizer-AppleSiliconMac.tar.gz
+          mkdir -p package
+          # -L で macOS のシンボリックリンクを実体ファイル/実体フォルダとしてコピーする。
+          # Windows 上で tar 展開したときの Invalid argument / Access denied を避けるため。
+          rsync -aL ./dist/recognizer/ ./package/AppleSiliconMac/
+          chmod +x ./package/AppleSiliconMac/recognizer
+          find ./package/AppleSiliconMac -type l -print > logs/symlinks_after_package.log
+          if [ -s logs/symlinks_after_package.log ]; then
+            echo "Unexpected symlinks remain:" >&2
+            cat logs/symlinks_after_package.log >&2
+            exit 1
+          fi
+          tar -czf recognizer-AppleSiliconMac.tar.gz -C package AppleSiliconMac
+          ls -lh recognizer-AppleSiliconMac.tar.gz > logs/package_ls.log
 
-      - name: Smoke test recognize minimal
-        run: |
-          printf '%s\n' '{"cmd":"recognize","id":2,"nBest":3,"strokes":[[[20,20],[180,180]]]}' | ./dist/AppleSiliconMac/recognizer
-
-      - name: Package
-        run: |
-          tar -C dist -czf recognizer-AppleSiliconMac.tar.gz AppleSiliconMac
-          ls -lh recognizer-AppleSiliconMac.tar.gz
-
-      - name: Upload artifact
+      - name: Upload recognizer artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: recognizer-AppleSiliconMac
-          path: recognizer-AppleSiliconMac.tar.gz
-          if-no-files-found: error
+          path: |
+            recognizer-AppleSiliconMac.tar.gz
+            logs/*.log
+          if-no-files-found: warn
