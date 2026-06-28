@@ -1,0 +1,70 @@
+name: Build macOS recognizer arm64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos-arm64:
+    name: macos-arm64
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show files
+        run: |
+          pwd
+          ls -la
+          test -f recognizer.py
+          test -f dakanji/model.tflite
+          test -f dakanji/labels.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install numpy pillow ai-edge-litert pyinstaller
+          fi
+
+      - name: LiteRT import test
+        run: |
+          python - <<'PY'
+          from ai_edge_litert.interpreter import Interpreter
+          print('ai_edge_litert import OK:', Interpreter)
+          PY
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --clean --noconfirm --onedir --name recognizer recognizer.py \
+            --add-data "dakanji/model.tflite:dakanji" \
+            --add-data "dakanji/labels.txt:dakanji" \
+            --collect-all ai_edge_litert
+
+      - name: Smoke test ping
+        run: |
+          chmod +x ./dist/recognizer/recognizer
+          printf '%s\n' '{"cmd":"ping","id":1}' | ./dist/recognizer/recognizer
+
+      - name: Smoke test recognize minimal
+        run: |
+          printf '%s\n' '{"cmd":"recognize","id":2,"nBest":3,"strokes":[[[20,20],[180,180]]]}' | ./dist/recognizer/recognizer
+
+      - name: Package
+        run: |
+          tar -C dist -czf recognizer-macos-arm64.tar.gz recognizer
+          ls -lh recognizer-macos-arm64.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recognizer-macos-arm64
+          path: recognizer-macos-arm64.tar.gz
+          if-no-files-found: error
