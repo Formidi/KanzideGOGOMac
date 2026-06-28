@@ -48,23 +48,29 @@ jobs:
             --add-data "dakanji/labels.txt:dakanji" \
             --collect-all ai_edge_litert
 
+      - name: Rename output folder to AppleSiliconMac
+        run: |
+          rm -rf ./dist/AppleSiliconMac
+          mv ./dist/recognizer ./dist/AppleSiliconMac
+          chmod +x ./dist/AppleSiliconMac/recognizer
+          find ./dist/AppleSiliconMac -maxdepth 2 -type f | head -50
+
       - name: Smoke test ping
         run: |
-          chmod +x ./dist/recognizer/recognizer
-          printf '%s\n' '{"cmd":"ping","id":1}' | ./dist/recognizer/recognizer
+          printf '%s\n' '{"cmd":"ping","id":1}' | ./dist/AppleSiliconMac/recognizer
 
       - name: Smoke test recognize minimal
         run: |
-          printf '%s\n' '{"cmd":"recognize","id":2,"nBest":3,"strokes":[[[20,20],[180,180]]]}' | ./dist/recognizer/recognizer
+          printf '%s\n' '{"cmd":"recognize","id":2,"nBest":3,"strokes":[[[20,20],[180,180]]]}' | ./dist/AppleSiliconMac/recognizer
 
       - name: Package
         run: |
-          tar -C dist -czf recognizer-macos-arm64.tar.gz recognizer
-          ls -lh recognizer-macos-arm64.tar.gz
+          tar -C dist -czf recognizer-AppleSiliconMac.tar.gz AppleSiliconMac
+          ls -lh recognizer-AppleSiliconMac.tar.gz
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: recognizer-macos-arm64
-          path: recognizer-macos-arm64.tar.gz
+          name: recognizer-AppleSiliconMac
+          path: recognizer-AppleSiliconMac.tar.gz
           if-no-files-found: error
